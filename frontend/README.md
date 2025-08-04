@@ -1,15 +1,16 @@
-# TensorFlow.js Emotion Detection Frontend
+# TensorFlow.js Emotion Detection Frontend (Next.js)
 
-This React application uses TensorFlow.js for real-time emotion detection from webcam video feed.
+This Next.js application uses TensorFlow.js for real-time emotion detection from webcam video feed.
 
 ## Features
 
 - Real-time face detection using TensorFlow.js
 - Emotion recognition (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral)
-- Modern, responsive UI with live video feed
+- Modern, responsive UI with Tailwind CSS
 - WebGL acceleration for better performance
 - Face detection status indicator
 - Confidence scoring for detected emotions
+- Next.js 14 with App Router
 
 ## Setup Instructions
 
@@ -29,7 +30,7 @@ pip install tensorflowjs
 
 # Convert your model
 tensorflowjs_converter --input_format keras \
-    /path/to/your/emotion_model.h5 \
+    ../backend/models/emotion_model.h5 \
     public/models/
 ```
 
@@ -54,7 +55,33 @@ const model = await tf.loadLayersModel('/models/emotion_model.json')
 ### 5. Run the Application
 
 ```bash
+# Development mode
 npm run dev
+
+# Production build
+npm run build
+npm start
+```
+
+The application will be available at `http://localhost:3000`
+
+## Project Structure
+
+```
+frontend/
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx          # Root layout
+│   │   ├── page.tsx            # Home page
+│   │   └── globals.css         # Global styles
+│   └── components/
+│       └── EmotionDetector.tsx # Main component
+├── public/
+│   └── models/                 # TensorFlow.js models
+├── package.json               # Dependencies
+├── next.config.ts            # Next.js configuration
+├── tailwind.config.ts        # Tailwind CSS config
+└── tsconfig.json            # TypeScript config
 ```
 
 ## Implementation Details
@@ -77,6 +104,7 @@ npm run dev
 - Tensor cleanup to prevent memory leaks
 - Efficient image preprocessing pipeline
 - 500ms detection interval for real-time performance
+- Next.js App Router for better performance
 
 ## Customization
 
@@ -121,6 +149,11 @@ setInterval(() => {
 - Reduce detection frequency if needed
 - Monitor memory usage in browser dev tools
 
+### Next.js Specific Issues
+- Ensure `'use client'` directive is used for client-side components
+- Check for SSR issues with TensorFlow.js
+- Verify dynamic imports are working correctly
+
 ## Backend Integration
 
 This frontend can work with the Python FastAPI backend for server-side processing:
@@ -133,7 +166,9 @@ This frontend can work with the Python FastAPI backend for server-side processin
 
 - `@tensorflow/tfjs`: Core TensorFlow.js library
 - `@tensorflow/tfjs-backend-webgl`: WebGL backend for GPU acceleration
-- `react`: UI framework
+- `next`: React framework
+- `react`: UI library
+- `tailwindcss`: CSS framework
 - `typescript`: Type safety
 
 ## Browser Compatibility
@@ -144,3 +179,43 @@ This frontend can work with the Python FastAPI backend for server-side processin
 - Edge
 
 Note: WebGL support required for optimal performance.
+
+## Development Commands
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Start production server
+npm start
+
+# Run linting
+npm run lint
+```
+
+## Deployment
+
+### Vercel (Recommended)
+```bash
+npm install -g vercel
+vercel
+```
+
+### Other Platforms
+- Netlify
+- Railway
+- DigitalOcean App Platform
+
+## Next Steps
+
+1. Replace demo data with real emotion datasets
+2. Implement proper face detection models
+3. Add authentication and user management
+4. Optimize for production deployment
+5. Add real-time collaboration features

@@ -1,3 +1,5 @@
+'use client'
+
 import { useRef, useEffect, useState } from 'react'
 import * as tf from '@tensorflow/tfjs'
 
@@ -9,11 +11,14 @@ export default function EmotionDetector() {
   const [isDetecting, setIsDetecting] = useState(false)
   const [faceDetected, setFaceDetected] = useState(false)
   const [detectionCount, setDetectionCount] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [model, setModel] = useState<tf.LayersModel | null>(null)
+  const [faceDetectionModel, setFaceDetectionModel] = useState<tf.LayersModel | null>(null)
 
   const emotionLabels = ["Angry", "Disgust", "Fear", "Happy", "Sad", "Surprise", "Neutral"]
 
   useEffect(() => {
-    const loadModel = async () => {
+    const loadModels = async () => {
       try {
         // Set backend to WebGL for better performance
         await tf.setBackend('webgl')
@@ -23,16 +28,33 @@ export default function EmotionDetector() {
         await tf.ready()
         console.log('TensorFlow.js initialized')
         
-        // For now, we'll use a mock model since we need to convert the .h5 model
-        // In production, you would load the actual model:
-        // const model = await tf.loadLayersModel('/models/emotion_model.json')
+        // Load emotion detection model
+        try {
+          const emotionModel = await tf.loadLayersModel('/models/emotion_model.json')
+          setModel(emotionModel)
+          console.log('Emotion model loaded successfully')
+        } catch (modelError) {
+          console.warn('Could not load emotion model, using simulation:', modelError)
+          // Continue with simulation if model not found
+        }
+        
+        // Load face detection model (if available)
+        try {
+          const faceModel = await tf.loadLayersModel('/models/face_detection_model.json')
+          setFaceDetectionModel(faceModel)
+          console.log('Face detection model loaded successfully')
+        } catch (faceModelError) {
+          console.warn('Could not load face detection model, using fallback:', faceModelError)
+          // Continue with skin color detection
+        }
         
         setIsModelLoaded(true)
         startVideo()
       } catch (error) {
-        console.error('Error loading model:', error)
+        console.error('Error loading models:', error)
+        setError('Failed to load TensorFlow.js models')
         setIsModelLoaded(true)
-        startVideo()
+      startVideo()
       }
     }
 
@@ -50,10 +72,13 @@ export default function EmotionDetector() {
             videoRef.current.srcObject = stream
           }
         })
-        .catch((err) => console.error('Camera error:', err))
+        .catch((err) => {
+          console.error('Camera error:', err)
+          setError('Failed to access camera. Please check permissions.')
+        })
     }
 
-    loadModel()
+    loadModels()
   }, [])
 
   const preprocessImage = (imageData: ImageData): tf.Tensor => {
@@ -71,9 +96,38 @@ export default function EmotionDetector() {
     return batched
   }
 
-  const detectFace = (imageData: ImageData): boolean => {
+  const detectFaceWithModel = async (imageData: ImageData): Promise<boolean> => {
+    if (!faceDetectionModel) {
+      return detectFaceWithSkinColor(imageData)
+    }
+
+    try {
+      // Preprocess image for face detection model
+      const tensor = tf.browser.fromPixels(imageData, 3) // RGB
+      const resized = tf.image.resizeBilinear(tensor, [224, 224]) // Common input size
+      const normalized = resized.div(255.0)
+      const batched = normalized.expandDims(0)
+      
+      // Predict face detection
+      const prediction = await faceDetectionModel.predict(batched) as tf.Tensor
+      const hasFace = prediction.dataSync()[0] > 0.5
+      
+      // Clean up
+      tensor.dispose()
+      resized.dispose()
+      normalized.dispose()
+      batched.dispose()
+      prediction.dispose()
+      
+      return hasFace
+    } catch (error) {
+      console.warn('Face detection model failed, falling back to skin color detection:', error)
+      return detectFaceWithSkinColor(imageData)
+    }
+  }
+
+  const detectFaceWithSkinColor = (imageData: ImageData): boolean => {
     // Simple face detection using skin color detection
-    // In production, you would use a proper face detection model
     const data = imageData.data
     let skinPixels = 0
     let totalPixels = data.length / 4
@@ -83,16 +137,42 @@ export default function EmotionDetector() {
       const g = data[i + 1]
       const b = data[i + 2]
       
-      // Simple skin color detection
+      // Enhanced skin color detection
       if (r > 95 && g > 40 && b > 20 && 
           Math.max(r, g, b) - Math.min(r, g, b) > 15 &&
-          Math.abs(r - g) > 15 && r > g && r > b) {
+          Math.abs(r - g) > 15 && r > g && r > b &&
+          r > 60 && g > 40 && b > 20) {
         skinPixels++
       }
     }
 
     const skinRatio = skinPixels / totalPixels
-    return skinRatio > 0.1 // If more than 10% of pixels are skin-colored
+    return skinRatio > 0.08 // Lower threshold for better detection
+  }
+
+  const predictEmotion = async (inputTensor: tf.Tensor): Promise<{ emotion: string; confidence: number }> => {
+    if (!model) {
+      // Fallback to simulation if model not loaded
+      return simulateEmotionDetection()
+    }
+
+    try {
+      const predictions = await model.predict(inputTensor) as tf.Tensor
+      const predictionData = predictions.dataSync()
+      const emotionIndex = predictionData.indexOf(Math.max(...predictionData))
+      const confidence = predictionData[emotionIndex]
+      
+      // Clean up
+      predictions.dispose()
+      
+      return {
+        emotion: emotionLabels[emotionIndex],
+        confidence: confidence
+      }
+    } catch (error) {
+      console.warn('Emotion prediction failed, using simulation:', error)
+      return simulateEmotionDetection()
+    }
   }
 
   const detectEmotion = async () => {
@@ -116,21 +196,16 @@ export default function EmotionDetector() {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
       
       // Detect if there's a face in the image
-      const hasFace = detectFace(imageData)
+      const hasFace = await detectFaceWithModel(imageData)
       setFaceDetected(hasFace)
       
       if (hasFace) {
         // Preprocess the image for emotion detection
         const inputTensor = preprocessImage(imageData)
         
-        // For demo purposes, we'll simulate emotion detection
-        // In a real implementation, you would use the loaded model:
-        // const predictions = await model.predict(inputTensor) as tf.Tensor
-        // const emotionIndex = predictions.argMax(1).dataSync()[0]
-        // const confidence = predictions.max().dataSync()[0]
-        
-        const mockPrediction = simulateEmotionDetection()
-        setEmotion(mockPrediction)
+        // Predict emotion
+        const prediction = await predictEmotion(inputTensor)
+        setEmotion(prediction)
         setDetectionCount(prev => prev + 1)
         
         // Clean up
@@ -170,127 +245,109 @@ export default function EmotionDetector() {
     return () => clearInterval(detectionInterval)
   }
 
+  if (error) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+          <h3 className="text-lg font-semibold text-red-800 mb-2">Error</h3>
+          <p className="text-red-600">{error}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div style={{ textAlign: 'center', padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
-      <h2 style={{ color:"white", backgroundColor: '#333', marginBottom: '30px' }}>
-        TensorFlow.js Emotion Detector
-      </h2>
-      
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        gap: '20px',
-        flexWrap: 'wrap'
-      }}>
-        <div>
-          <h4>Live Video Feed</h4>
-          <video
-            ref={videoRef}
-            onPlay={handleVideoOnPlay}
-            autoPlay
-            muted
-            width="480"
-            height="360"
-            style={{ 
-              border: '3px solid #2196F3', 
-              borderRadius: '12px',
-              boxShadow: '0 4px 8px rgba(0,0,0,0.1)'
-            }}
-          />
+    <div className="max-w-6xl mx-auto p-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Video Feed */}
+        <div className="space-y-4">
+          <h3 className="text-xl font-semibold text-gray-900">Live Video Feed</h3>
+          <div className="video-container">
+      <video
+        ref={videoRef}
+        onPlay={handleVideoOnPlay}
+        autoPlay
+        muted
+              playsInline
+              className="w-full h-auto rounded-lg"
+            />
+          </div>
         </div>
         
-        <div style={{ minWidth: '300px' }}>
-          <h4>Detection Results</h4>
-          <div style={{ 
-            padding: '20px', 
-            backgroundColor: '#f8f9fa', 
-            borderRadius: '12px',
-            border: '2px solid #e9ecef',
-            minHeight: '200px',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center'
-          }}>
+        {/* Detection Results */}
+        <div className="space-y-4">
+          <h3 className="text-xl font-semibold text-gray-900">Detection Results</h3>
+          <div className="detection-panel">
             {!isModelLoaded ? (
-              <div>
-                <p>🔄 Loading TensorFlow.js model...</p>
-                <div style={{ marginTop: '10px' }}>
-                  <div style={{ 
-                    width: '100%', 
-                    height: '4px', 
-                    backgroundColor: '#e9ecef',
-                    borderRadius: '2px',
-                    overflow: 'hidden'
-                  }}>
-                    <div style={{ 
-                      width: '60%', 
-                      height: '100%', 
-                      backgroundColor: '#2196F3',
-                      animation: 'loading 1.5s ease-in-out infinite'
-                    }}></div>
-                  </div>
+              <div className="text-center py-8">
+                <div className="loading-animation">
+                  <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
                 </div>
+                <p className="mt-4 text-gray-600">Loading TensorFlow.js models...</p>
               </div>
             ) : (
-              <div>
-                <div style={{ marginBottom: '15px' }}>
-                  <span style={{ 
-                    padding: '5px 10px',
-                    borderRadius: '15px',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    backgroundColor: faceDetected ? '#4CAF50' : '#f44336',
-                    color: 'white'
-                  }}>
+              <div className="space-y-6">
+                {/* Face Detection Status */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Face Detection:</span>
+                  <span className={`face-status ${faceDetected ? 'face-detected' : 'face-not-detected'}`}>
                     {faceDetected ? '👤 Face Detected' : '❌ No Face Detected'}
                   </span>
                 </div>
                 
+                {/* Model Status */}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Emotion Model:</span>
+                  <span className={`face-status ${model ? 'face-detected' : 'face-not-detected'}`}>
+                    {model ? '✅ Loaded' : '⚠️ Using Simulation'}
+                  </span>
+                </div>
+                
+                {/* Emotion Display */}
                 {emotion && faceDetected ? (
-                  <div>
-                    <h3 style={{ 
-                      fontSize: '24px', 
-                      fontWeight: 'bold',
-                      color: '#2196F3',
-                      margin: '10px 0'
-                    }}>
-                      {emotion.emotion}
-                    </h3>
-                    <p style={{ fontSize: '16px', color: '#666' }}>
-                      Confidence: {(emotion.confidence * 100).toFixed(1)}%
-                    </p>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '8px', 
-                      backgroundColor: '#e9ecef',
-                      borderRadius: '4px',
-                      marginTop: '10px'
-                    }}>
-                      <div style={{ 
-                        width: `${emotion.confidence * 100}%`, 
-                        height: '100%', 
-                        backgroundColor: '#4CAF50',
-                        borderRadius: '4px',
-                        transition: 'width 0.3s ease'
-                      }}></div>
+                  <div className="space-y-4">
+                    <div className="text-center">
+                      <h4 className="text-sm font-medium text-gray-700 mb-2">Detected Emotion</h4>
+                      <div className="emotion-display">{emotion.emotion}</div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Confidence:</span>
+                        <span className="font-medium">{(emotion.confidence * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="confidence-bar">
+                        <div 
+                          className="confidence-fill"
+                          style={{ width: `${emotion.confidence * 100}%` }}
+                        ></div>
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <p style={{ color: '#666', fontSize: '16px' }}>
-                    {faceDetected ? 'Analyzing emotions...' : 'Please position your face in the camera'}
-                  </p>
+                  <div className="text-center py-8">
+                    <p className="text-gray-600">
+                      {faceDetected ? 'Analyzing emotions...' : 'Please position your face in the camera'}
+                    </p>
+                  </div>
                 )}
                 
-                <div style={{ 
-                  marginTop: '20px', 
-                  padding: '10px',
-                  color: "black",
-                  // backgroundColor: '#e3f2fd',
-                  borderRadius: '8px',
-                  fontSize: '14px'
-                }}>
-                  <p>Detections: {detectionCount}</p>
-                  <p>Backend: {tf.getBackend()}</p>
+                {/* Stats */}
+                <div className="border-t pt-4 space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Detections:</span>
+                    <span className="font-medium">{detectionCount}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Backend:</span>
+                    <span className="font-medium">{tf.getBackend()}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -298,29 +355,16 @@ export default function EmotionDetector() {
         </div>
       </div>
       
-      <div style={{ 
-        marginTop: '30px', 
-        padding: '20px',
-        backgroundColor: '#fff3cd',
-        borderRadius: '8px',
-        border: '1px solid #ffeaa7',
-        color: 'black'
-      }}>
-        <h4>📝 Implementation Notes</h4>
-        <ul style={{ textAlign: 'left', maxWidth: '600px', margin: '0 auto' }}>
-          <li>This demo uses simulated emotion detection. For production, convert your .h5 model to TensorFlow.js format.</li>
-          <li>Face detection uses simple skin color detection. For better accuracy, use a proper face detection model.</li>
-          <li>To use your actual model, place the converted model files in <code>/public/models/</code>.</li>
-          <li>Use <code>tensorflowjs_converter</code> to convert your Python model to TensorFlow.js format.</li>
+      {/* Implementation Notes */}
+      <div className="mt-8 bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+        <h4 className="text-lg font-semibold text-yellow-800 mb-3">📝 Implementation Notes</h4>
+        <ul className="space-y-2 text-sm text-yellow-700">
+          <li>• {model ? 'Emotion model loaded successfully' : 'Using simulated emotion detection. For production, convert your .h5 model to TensorFlow.js format.'}</li>
+          <li>• {faceDetectionModel ? 'Face detection model loaded' : 'Face detection uses enhanced skin color detection. For better accuracy, use a proper face detection model.'}</li>
+          <li>• To use your actual models, place the converted model files in <code className="bg-yellow-100 px-1 rounded">/public/models/</code>.</li>
+          <li>• Use <code className="bg-yellow-100 px-1 rounded">tensorflowjs_converter</code> to convert your Python models to TensorFlow.js format.</li>
         </ul>
       </div>
-      
-      <style>{`
-        @keyframes loading {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-      `}</style>
     </div>
   )
 }

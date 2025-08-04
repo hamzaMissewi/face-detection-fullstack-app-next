@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/saved_model:/app/saved_model
+  frontend:
+    working_dir: /app
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile # if you containerize next.js too
+    ports:
+      - "3000:3000"
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
