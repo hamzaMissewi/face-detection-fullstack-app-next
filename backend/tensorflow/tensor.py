@@ -15,6 +15,21 @@ x_test = tf.image.resize(x_test[..., tf.newaxis], (48, 48)) / 255.0
 train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(32)
 val_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(32)
 
+data = tf.keras.datasets.fashion_mnist
+
+(training_images, training_labels), (test_images, test_labels) = data.load_data()
+
+
+training_images = training_images / 255.0
+test_images = test_images / 255.0
+
+model = tf.keras.models.Sequential([
+     tf.keras.layers.Flatten(input_shape=(28, 28)),
+     tf.keras.layers.Dense(128, activation=tf.nn.relu),
+     tf.keras.layers.Dense(10, activation=tf.nn.softmax)
+])
+
+
 # Simple CNN model for emotion detection
 model = tf.keras.models.Sequential([
   tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(48,48,1)),
@@ -26,9 +41,12 @@ model = tf.keras.models.Sequential([
   tf.keras.layers.Dense(10, activation='softmax')  # 10 classes for MNIST demo
 ])
 
+
 model.compile(optimizer='adam',
               loss='sparse_categorical_crossentropy',
               metrics=['accuracy'])
+
+model.fit(training_images, training_labels, epochs=5)
 
 # Training
 model.fit(train_dataset,
